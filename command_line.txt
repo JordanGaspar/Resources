@@ -1,0 +1,1 @@
+cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=/home/jordan/vcpkg/scripts/buildsystems/vcpkg.cmake -DBUILD_SHARED_LIBS=OFF -DRESOURCES_UTILITY=1 -DCMAKE_BUILD_TYPE=Release
