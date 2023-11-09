@@ -174,11 +174,11 @@ void Resources::storeTexture(std::string_view filename, std::string_view name) {
 
   bind_text_helper(pimpl->db, pimpl->insert_texture_stmt, name, 1);
 
-  bind_int_helper(pimpl->db, pimpl->insert_texture_stmt, 2, width);
+  bind_int_helper(pimpl->db, pimpl->insert_texture_stmt, width, 2);
 
-  bind_int_helper(pimpl->db, pimpl->insert_texture_stmt, 3, height);
+  bind_int_helper(pimpl->db, pimpl->insert_texture_stmt, height, 3);
 
-  bind_int_helper(pimpl->db, pimpl->insert_texture_stmt, 4, comp);
+  bind_int_helper(pimpl->db, pimpl->insert_texture_stmt, comp, 4);
 
   bind_blob64_helper(pimpl->db, pimpl->insert_texture_stmt, compressed.str(),
                      5);
@@ -319,10 +319,8 @@ void Resources::storeShader(std::string_view filename, std::string_view name,
 #endif
 
 Resources::texture_t Resources::getTexture(std::string_view name) {
-  if (sqlite3_bind_text(pimpl->select_texture_by_name_stmt, 1, name.data(),
-                        name.size(), SQLITE_STATIC) != SQLITE_OK) {
-    throw std::runtime_error(sqlite3_errmsg(pimpl->db));
-  }
+
+  bind_text_helper(pimpl->db, pimpl->select_texture_by_name_stmt, name, 1);
 
   int stage = 0;
 
