@@ -2,11 +2,14 @@ cmake_minimum_required(VERSION 3.27)
 
 set(Project "Resources")
 
+# SET THIS VARIABLE TO ENABLE UTILITY TOOL
+# WITH OUT RESOURCES_UTILITY, THE TOOL 
+# FUNCTIONS ARE DISABLED.
+set(RESOURCES_UTILITY true)
+
 set(Header Resources.hpp)
 
 set(Source Resources.cpp)
-
-set(RESOURCES_UTILITY true)
 
 if (NOT DEFINED RESOURCES_UTILITY)
     add_library(${Project} ${Source} ${Header})
