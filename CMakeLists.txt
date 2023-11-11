@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.27)
 
+include(FetchContent)
+
 set(Project "Resources")
 
 # SET THIS VARIABLE TO ENABLE UTILITY TOOL
@@ -30,14 +32,18 @@ target_include_directories(${Project} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 set_target_properties(${Project} PROPERTIES PUBLIC_HEADER ${Header})
 
-find_package(unofficial-sqlite3 CONFIG REQUIRED)
-target_link_libraries(${Project} PUBLIC unofficial::sqlite3::sqlite3)
+FetchContent_Declare(ZLibCPP 
+GIT_REPOSITORY https://github.com/JordanGaspar/ZLibCPP.git)
+FetchContent_MakeAvailable(ZLibCPP)
 
-find_package(Boost REQUIRED COMPONENTS iostreams)
-target_link_libraries(${Project} PUBLIC Boost::boost Boost::iostreams)
+target_include_directories(${Project} PRIVATE ${ZLibCPP_SOURCE_DIR})
+target_link_libraries(${Project} PRIVATE ZLibCPP)
+
+find_package(unofficial-sqlite3 CONFIG REQUIRED)
+target_link_libraries(${Project} PRIVATE unofficial::sqlite3::sqlite3)
 
 find_package(ZLIB REQUIRED)
-target_link_libraries(${Project} PUBLIC ZLIB::ZLIB)
+target_link_libraries(${Project} PRIVATE ZLIB::ZLIB)
 
 include(GNUInstallDirs)
 install(TARGETS ${Project} ${Project}_bin

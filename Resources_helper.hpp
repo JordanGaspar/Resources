@@ -29,6 +29,10 @@ E-mail: jordangaspar@gmail.com
 #include <span>
 #include <sqlite3.h>
 #include <stdexcept>
+#include <sstream>
+#include <vector>
+#include <cstddef>
+#include <zlib.h>
 
 //! Open database helper function.
 inline void open_helper(sqlite3*& db, const std::string& query){
@@ -69,6 +73,14 @@ inline void bind_int_helper(sqlite3 *&db, sqlite3_stmt *&stmt, int data,
 inline void bind_blob64_helper(sqlite3 *&db, sqlite3_stmt *&stmt,
                                std::string_view data, int position) {
   if (sqlite3_bind_blob64(stmt, position, data.data(), data.size(),
+                          SQLITE_STATIC) != SQLITE_OK) {
+    throw std::runtime_error(sqlite3_errmsg(db));
+  }
+}
+
+inline void bind_blob64_helper(sqlite3 *&db, sqlite3_stmt *&stmt,
+                               std::span<unsigned char> data, int position) {
+  if (sqlite3_bind_blob64(stmt, position, data.data(), data.size_bytes(),
                           SQLITE_STATIC) != SQLITE_OK) {
     throw std::runtime_error(sqlite3_errmsg(db));
   }

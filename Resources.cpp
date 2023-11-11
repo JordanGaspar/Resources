@@ -35,12 +35,7 @@ E-mail: jordangaspar@gmail.com
 #include <string>
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_FAILURE_USERMSG
-#include <boost/iostreams/copy.hpp>
-#include <boost/iostreams/filter/zlib.hpp>
-#include <boost/iostreams/filtering_stream.hpp>
-#include <boost/iostreams/filtering_streambuf.hpp>
-#include <boost/iostreams/stream.hpp>
-#include <boost/iostreams/stream_buffer.hpp>
+#include <ZLibCPP.hpp>
 #include <stb_image.h>
 
 struct Resources::impl {
@@ -55,9 +50,11 @@ struct Resources::impl {
   sqlite3_stmt *insert_shader_stmt;
   sqlite3_stmt *insert_shader_type_stmt;
   sqlite3_stmt *select_shader_type_stmt;
+  ZLibCPP::deflate deflate;
 #endif
   sqlite3_stmt *select_texture_by_name_stmt;
   sqlite3_stmt *select_shader_by_name_stmt;
+  ZLibCPP::inflate inflate;
 };
 
 //! Get database_path as const char*
@@ -86,7 +83,7 @@ void Resources::impl::open() {
       "(ID INTEGER NOT NULL PRIMARY KEY, NAME TEXT UNIQUE NOT NULL, WIDTH "
       "INTEGER NOT NULL, "
       "HEIGHT INTEGER NOT NULL, COMPONENTS INTEGER NOT NULL, CONTENT BLOB NOT "
-      "NULL);";
+      "NULL, UNCOMPRESSED_SIZE INTEGER NOT NULL);";
 
   std::string shader_type_table =
       "CREATE TABLE IF NOT EXISTS SHADER_TYPE "
@@ -96,7 +93,8 @@ void Resources::impl::open() {
       "CREATE TABLE IF NOT EXISTS SHADERS "
       "(ID INTEGER NOT NULL PRIMARY KEY, NAME TEXT UNIQUE NOT NULL, "
       "TYPE INTEGER NOT NULL, "
-      "CONTENT BLOB NOT NULL,"
+      "CONTENT BLOB NOT NULL, "
+      "UNCOMPRESSED_SIZE INTEGER NOT NULL, "
       "FOREIGN KEY (TYPE) REFERENCES SHADER_TYPE(ID));";
 
   open_helper(db, texture_table);
@@ -110,14 +108,15 @@ void Resources::impl::prepare() {
 
 #ifdef RESOURCES_UTILITY
   std::string insert_texture_query =
-      "INSERT INTO TEXTURES (NAME, WIDTH, HEIGHT, COMPONENTS, CONTENT)"
-      "VALUES (?, ?, ?, ?, ?);";
+      "INSERT INTO TEXTURES (NAME, WIDTH, HEIGHT, COMPONENTS, CONTENT, "
+      "UNCOMPRESSED_SIZE)"
+      "VALUES (?, ?, ?, ?, ?, ?);";
 
   std::string insert_shader_type_query =
       "INSERT INTO SHADER_TYPE (TYPE) VALUES (?) RETURNING ID;";
 
-  std::string insert_shader_query =
-      "INSERT INTO SHADERS (NAME, TYPE, CONTENT) VALUES (?, ?, ?);";
+  std::string insert_shader_query = "INSERT INTO SHADERS (NAME, TYPE, CONTENT, "
+                                    "UNCOMPRESSED_SIZE) VALUES (?, ?, ?, ?);";
 
   std::string select_shader_type_query =
       "SELECT ID FROM SHADER_TYPE WHERE TYPE = ?;";
@@ -125,10 +124,11 @@ void Resources::impl::prepare() {
 #endif
 
   std::string select_texture_by_name_query =
-      "SELECT WIDTH, HEIGHT, COMPONENTS, CONTENT FROM TEXTURES WHERE NAME = ?;";
+      "SELECT WIDTH, HEIGHT, COMPONENTS, CONTENT, UNCOMPRESSED_SIZE FROM "
+      "TEXTURES WHERE NAME = ?;";
 
   std::string select_shader_by_name_query =
-      "SELECT CONTENT FROM SHADERS WHERE NAME = ?;";
+      "SELECT CONTENT, UNCOMPRESSED_SIZE FROM SHADERS WHERE NAME = ?;";
 
 #ifdef RESOURCES_UTILITY
   prepare_helper(db, insert_texture_query, insert_texture_stmt);
@@ -163,12 +163,7 @@ void Resources::storeTexture(std::string_view filename, std::string_view name) {
 
   unsigned int file_size = height * width * comp * sizeof(stbi_uc);
 
-  std::stringstream compressed;
-  boost::iostreams::filtering_ostream out;
-  out.push(boost::iostreams::zlib_compressor());
-  out.push(compressed);
-  out.write(reinterpret_cast<char *>(file), file_size);
-  boost::iostreams::close(out);
+  auto compressed = pimpl->deflate.compress(std::span(file, file_size));
 
   stbi_image_free(file);
 
@@ -180,8 +175,9 @@ void Resources::storeTexture(std::string_view filename, std::string_view name) {
 
   bind_int_helper(pimpl->db, pimpl->insert_texture_stmt, comp, 4);
 
-  bind_blob64_helper(pimpl->db, pimpl->insert_texture_stmt, compressed.str(),
-                     5);
+  bind_blob64_helper(pimpl->db, pimpl->insert_texture_stmt, compressed, 5);
+
+  bind_int_helper(pimpl->db, pimpl->insert_texture_stmt, file_size, 6);
 
   if (sqlite3_step(pimpl->insert_texture_stmt) != SQLITE_DONE) {
     throw std::runtime_error(sqlite3_errmsg(pimpl->db));
@@ -281,25 +277,23 @@ void Resources::storeShader(std::string_view filename, std::string_view name,
                              "\'");
   }
 
-  std::stringstream strm;
-  boost::iostreams::filtering_streambuf<boost::iostreams::input> in;
-  in.push(boost::iostreams::zlib_compressor());
-  in.push(file);
-  boost::iostreams::copy(in, strm);
+  file.seekg(std::ios::end);
+  auto file_size = file.tellg();
+  file.seekg(std::ios::beg);
+
+  std::vector<unsigned char> file_data(file_size);
+
+  file.read(reinterpret_cast<char *>(file_data.data()),
+            std::streamsize(file_size));
 
   file.close();
 
-  strm.seekg(std::ios::end);
-  auto strm_size = strm.tellg();
-  strm.seekg(std::ios::beg);
-
-  std::vector<char> file_data(strm_size);
-
-  strm.read(file_data.data(), std::streamsize(strm_size));
+  auto compressed = pimpl->deflate.compress(file_data);
 
   bind_text_helper(pimpl->db, pimpl->insert_shader_stmt, name, 1);
   bind_int_helper(pimpl->db, pimpl->insert_shader_stmt, type_id, 2);
-  bind_blob64_helper(pimpl->db, pimpl->insert_shader_stmt, file_data.data(), 3);
+  bind_blob64_helper(pimpl->db, pimpl->insert_shader_stmt, file_data, 3);
+  bind_int_helper(pimpl->db, pimpl->insert_shader_stmt, file_size, 4);
 
   int status;
   while ((status = sqlite3_step(pimpl->insert_shader_stmt)) != SQLITE_DONE) {
@@ -337,26 +331,15 @@ Resources::texture_t Resources::getTexture(std::string_view name) {
       height = sqlite3_column_int(pimpl->select_texture_by_name_stmt, 1);
       components = sqlite3_column_int(pimpl->select_texture_by_name_stmt, 2);
       int size = sqlite3_column_bytes(pimpl->select_texture_by_name_stmt, 3);
-      const char *buffer = reinterpret_cast<const char *>(
-          sqlite3_column_blob(pimpl->select_texture_by_name_stmt, 3));
+      unsigned char *buffer =
+          reinterpret_cast<unsigned char *>(const_cast<void *>(
+              sqlite3_column_blob(pimpl->select_texture_by_name_stmt, 3)));
+      size_t orignal_size =
+          sqlite3_column_int64(pimpl->select_texture_by_name_stmt, 4);
 
-      std::stringstream strm;
+      content =
+          pimpl->inflate.decompress(std::span(buffer, size), orignal_size);
 
-      boost::iostreams::filtering_streambuf<boost::iostreams::input> in;
-      in.push(boost::iostreams::zlib_decompressor());
-      in.push(boost::iostreams::array_source(buffer, size));
-
-      boost::iostreams::copy(in, strm);
-
-      auto begin = strm.tellg();
-      strm.seekg(0, std::ios::end);
-      auto strm_size = (strm.tellg() - begin);
-      strm.seekg(0, std::ios::beg);
-
-      content.resize(strm_size);
-
-      strm.read(reinterpret_cast<char *>(content.data()),
-                std::streamsize(content.size()));
     } else {
       throw std::runtime_error(sqlite3_errmsg(pimpl->db));
     }
@@ -369,7 +352,7 @@ Resources::texture_t Resources::getTexture(std::string_view name) {
   return texture;
 }
 
-std::string Resources::getShader(std::string_view name){
+std::string Resources::getShader(std::string_view name) {
   std::string str;
   bind_text_helper(pimpl->db, pimpl->select_shader_by_name_stmt, name, 1);
 
@@ -380,24 +363,22 @@ std::string Resources::getShader(std::string_view name){
     case SQLITE_BUSY:
       continue;
     case SQLITE_ROW: {
-      auto data = sqlite3_column_blob(pimpl->select_shader_by_name_stmt, 0);
+      auto data = reinterpret_cast<const char *>(
+          sqlite3_column_blob(pimpl->select_shader_by_name_stmt, 0));
       auto size = sqlite3_column_bytes(pimpl->select_shader_by_name_stmt, 0);
+      size_t original_size =
+          sqlite3_column_int64(pimpl->select_shader_by_name_stmt, 1);
 
-      boost::iostreams::filtering_streambuf<boost::iostreams::input> in;
-      in.push(boost::iostreams::zlib_decompressor());
-      in.push(boost::iostreams::array_source(reinterpret_cast<const char*>(data), size));
+      str = pimpl->inflate.decompress(std::string_view(data, size),
+                                      original_size);
 
-      std::stringstream strm;
-      boost::iostreams::copy(in, strm);
-
-      str = strm.str();
     } break;
     default:
       throw std::runtime_error(sqlite3_errmsg(pimpl->db));
     }
   }
 
-  if (sqlite3_clear_bindings(pimpl->select_shader_by_name_stmt)){
+  if (sqlite3_clear_bindings(pimpl->select_shader_by_name_stmt)) {
     throw std::runtime_error(sqlite3_errmsg(pimpl->db));
   }
 
